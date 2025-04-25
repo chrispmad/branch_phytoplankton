@@ -5,6 +5,8 @@ date: "`r Sys.Date()`"
 output: 
   flexdashboard::flex_dashboard:
     orientation: columns
+editor_options: 
+  chunk_output_type: console
 ---
 
 <style>
@@ -21,8 +23,6 @@ library(flexdashboard)
 library(crosstalk)
 library(tidyverse)
 library(plotly)
-library(sf)
-library(leaflet)
 
 # If you haven't installed the summary widget code before,
 # please nab it from github by running the line below:
@@ -34,31 +34,13 @@ library(summarywidget)
 knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
 
 # Read in data
-
-# # Take the CO2 dataset that comes with R, add unique row ID, and put that as the first column.
-# co2 = CO2 |> 
-#   as_tibble() |> 
-#   mutate(row_id = row_number()) |> 
-#   dplyr::select(row_id, everything())
-# 
-# # Add some fake coordinates to our data so we can throw them on a map.
-# co2 = co2 |> 
-#   mutate(
-#     lat = case_when(
-#       Type == 'Quebec' ~ 50 + rnorm(n = nrow(co2), mean = 0, sd = 2),
-#       T ~ 32 + rnorm(n = nrow(co2), mean = 0, sd = 0.5)
-#     ),
-#     lon = case_when(
-#       Type == 'Quebec' ~ -70 + rnorm(n = nrow(co2), mean = 0, sd = 2),
-#       T ~ -90 + rnorm(n = nrow(co2), mean = 0, sd = 0.5)
-#     )) |> 
-#   st_as_sf(coords = c("lon","lat"), crs = 4326)
+d = readxl::read_excel("output/data_both_projects_rolled_up.xlsx")
 
 # Set up a shared data object; we'll use this to make plots and filters that are connected.
-shared_co2 = crosstalk::SharedData$new(co2)
+shared_d = crosstalk::SharedData$new(d)
 ```
 
-Column {data-width=300}
+Column {data-width=150}
 --------------------------------------------------
 
 ### Filters and Info
@@ -69,101 +51,47 @@ bscols(
   list(),
   list(
     crosstalk::filter_select(
-      "type","Type", shared_co2, ~Type,
-    ),
-    crosstalk::filter_select(
-      "treat","Treatment", shared_co2, ~Treatment
+      "project","Project", shared_d, ~project,
     ),
     crosstalk::filter_slider(
-      "conc","Concentration", shared_co2, ~conc
+      "date","Date", shared_d, ~date
     )
   ),
   list()
 )
 ```
 
-```{r}
-# The big HTML code block below this defines a table. The reason I spell this table out by hand (terrible!) is so that we can use Kent's summarywidget package to feed in single values that are connected to our filters / plots. It's unwieldy to set up, but I think it looks nice in the dashboard. What do you think?
+```{r plotting_function}
+
 ```
 
-<table width = "100%">
-  <tr>
-    <th><h3>Variable</h3></th>
-    <th><h3>Summary Stat</h3></th>
-  </tr>
-  <tr>
-    <td><center><h4>Count</h4></center></td>
-    <td>
-      <center><h4><font color="#593869"><b>`r summarywidget::summarywidget(data = shared_co2, statistic =     'count')`</b></font></h4></center>
-    </td>
-  </tr>
-  <tr>
-    <td><center><h4>Sum</h4></center></td>
-    <td>
-      <center><h4><font color="#593869"><b>`r   summarywidget::summarywidget(data = shared_co2, statistic =   'sum', column = 'uptake')`</b></font></h4></center>
-    </td>
-  </tr>
-  <tr>
-    <td><center><h4>Mean</h4></center></td>
-    <td>
-    <center><h4><font color="#593869"><b>`r   summarywidget::summarywidget(data = shared_co2, statistic =   'mean', column = 'uptake')`</b></font></h4></center>
-    </td>
-  </tr>
-</table>
+#### Title
 
-<hr>
+Extra text.
 
-#### Interactive Dashboards
-
-We can make interactive dashboards without resorting to Shiny, which is nice if we want to avoid the steep learning curve of {shiny}!
-
-To make our dashboard, we will use the package {crosstalk}, which allows us to connect figure(s) and data filtering options. To structure the dashboard layout, we can use {flexdashboard}.
-
-#### More Info
-
-- Crosstalk: https://rstudio.github.io/crosstalk/using.html
-- Plotly: https://plotly.com/r/
-- Flexdashboard: https://pkgs.rstudio.com/flexdashboard/ 
-
-Column {data-width=600}
+Column {data-width=750}
 --------------------------------------------
 
-### Linked Map 
-```{r linked_map, fig.height=6}
-# Setting up a leaflet map
-
-# First, set up the colour palette.
-mypal = leaflet::colorNumeric(
-  palette = 'RdYlGn',
-  domain = co2$uptake
-)
-
-# Next, set up the actual leaflet map.
-leaflet() |> 
-  addTiles() |> 
-  addProviderTiles(providers$CartoDB.DarkMatter) |> 
-  setView(lng = -80, lat = 40, zoom = 3) |> 
-  addCircleMarkers(
-    color = ~mypal(uptake),
-    label = ~paste0(Type, ", Treatment: ", Treatment,", uptake: ", uptake),
-    data = shared_co2
-  ) |> 
-  addLegend(
-    data = shared_co2,
-    pal = mypal,
-    values = ~uptake
-  )
+### Linked Figure {.tabset}
+```{r linked_figure, fig.height=6}
+shared_d |> 
+  dplyr::group_by(project, year, basin, class.name, month) |> 
+  dplyr::summarise(DB.cells.ml = sum(DB.cells.ml, na.rm=T),
+                   LV.cells.ml = sum(LV.cells.ml, na.rm=T)) |> 
+  plot_ly(, x = ~month, y = ~DB.cells.ml)
 ```
 
-### Linked Plots
-```{r linked_plots}
-# Set up two plotly figures, combining them inside a 'subplot()'.
-subplot(
-    plot_ly(shared_co2) |> add_trace(x = ~conc, y = ~uptake, color = ~Type, type = 'scatter', mode = 'markers') |> 
-  layout(yaxis = list(title = 'CO<sup>2</sup> Uptake')),
-  plot_ly(shared_co2) |> 
-    add_trace(x = ~conc, y = ~uptake, color = ~Type, type = "box") |> 
-  layout(yaxis = list(title = 'CO<sup>2</sup> Uptake')),
-  nrows = 2,
-  shareX = TRUE)
+#### Goop
+```{r}
+
+```
+
+#### Moop
+```{r}
+
+```
+
+#### Doop
+```{r}
+
 ```
