@@ -28,7 +28,8 @@ col_scheme = ggplot2::scale_fill_manual(
 )
 
 my_plot_theme = theme_minimal() + 
-  theme(axis.text = element_text(size = 15))
+  theme(axis.text = element_text(size = 13),
+        axis.title = element_text(size = 15))
 ```
 
 ```{r create_plotting_functions}
@@ -36,7 +37,7 @@ make_plot_by_month = function(d,vars,var_label,proj, species_count = F){
   if(!species_count){
     d_summarised = d |> 
       tidyr::pivot_longer(cols = vars, names_to = "lab", values_to = 'y') |> 
-      dplyr::mutate(lab = ifelse(stringr::str_detect(lab,"^DB"),"Darren","Lydia")) |> 
+      dplyr::mutate(lab = ifelse(stringr::str_detect(lab,"^DB"),"Darren","Lidija")) |> 
       dplyr::filter(project == proj) |> 
       dplyr::group_by(project, year, basin, month, class.name, lab) |> 
       dplyr::reframe(y = sum(y, na.rm=T))
@@ -58,13 +59,13 @@ make_plot_by_month = function(d,vars,var_label,proj, species_count = F){
       dplyr::count(project, year, basin, month) |> 
       dplyr::mutate(lab = 'Darren')
     
-    # Lydia's data
+    # Lidija's data
     lv_d = d |> 
       dplyr::select(project, year, basin, month, LV.cells.ml, LV.mm3.l, spp) |> 
       # Ensure rows we're keeping rows where DB reported values
       dplyr::filter(LV.cells.ml != 0, LV.mm3.l != 0, !is.na(LV.cells.ml), !is.na(LV.mm3.l)) |> 
       dplyr::count(project, year, basin, month) |> 
-      dplyr::mutate(lab = 'Lydia')
+      dplyr::mutate(lab = 'Lidija')
     
     d_for_plot = dplyr::bind_rows(db_d, lv_d) |> 
       dplyr::filter(project == proj)
@@ -82,7 +83,10 @@ make_plot_by_month = function(d,vars,var_label,proj, species_count = F){
 
 ```
 
-## Sections {.tabset}
+# Sections {.tabset}
+
+## Stats {.tabset}
+
 ### Descriptive Statistics
 
 ```{r}
@@ -91,9 +95,9 @@ d |>
   dplyr::mutate(value = round(value, 4)) |> 
   dplyr::group_by(name) |> 
   dplyr::reframe(min_value = min(value),
-               max_value = max(value),
-               median_value = median(value),
-               mean_value = mean(value)) |> 
+                 max_value = max(value),
+                 median_value = median(value),
+                 mean_value = mean(value)) |> 
   dplyr::arrange(dplyr::desc(max_value)) |> 
   dplyr::rename(variable = name) |> 
   knitr::kable()
@@ -106,13 +110,13 @@ d |>
 ```{r}
 d_for_t_tests = d |> 
   tidyr::pivot_longer(cols = c(starts_with("DB"),starts_with("LV")), names_to = "var", values_to = 'value') |> 
-  dplyr::mutate(lab = ifelse(stringr::str_detect(var,"^DB"),"Darren","Lydia")) |> 
+  dplyr::mutate(lab = ifelse(stringr::str_detect(var,"^DB"),"Darren","Lidija")) |> 
   dplyr::mutate(var_full = stringr::str_remove(var,"^[A-Z]{2}\\.")) |> 
   dplyr::mutate(var_full = ifelse(var_full == 'cells.ml', 'abundance','biovolume')) |> 
   dplyr::select(project, year, lab, basin, var_full, value) |> 
   group_by(project, year, basin, var_full) |> 
   group_split()
-  
+
 t_test_results = d_for_t_tests |> 
   purrr::map( ~ {
     rstatix::pairwise_t_test(
@@ -127,7 +131,7 @@ t_test_results = d_for_t_tests |>
       dplyr::select(variable,year,basin,project, group1:p.adj.signif)
   }) |> 
   dplyr::bind_rows()
-  
+
 knitr::kable(t_test_results)
 
 t_test_results_xy = t_test_results |> 
@@ -148,19 +152,87 @@ boxplot_res_l = d_for_t_tests |>
       stat_pvalue_manual(relevant_t_test_results, hide.ns = TRUE) +
       labs(x = "Lab", y = y_var_label,
            title = paste0(relevant_t_test_results$project," ",
-                         relevant_t_test_results$basin,", ",
-                         relevant_t_test_results$year,": ",
-                         str_to_title(relevant_t_test_results$variable),
-                         " (adj. p-value: ",
-                         relevant_t_test_results$p.adj,
-                         ")"))
+                          relevant_t_test_results$basin,", ",
+                          relevant_t_test_results$year,": ",
+                          str_to_title(relevant_t_test_results$variable),
+                          " (adj. p-value: ",
+                          relevant_t_test_results$p.adj,
+                          ")"))
   })
-  
+
 ```
 
 #### Boxplots
 ```{r}
 boxplot_res_l
+```
+
+#### Significant Differences
+
+```{r}
+#1.	Can you look to see if there are significant differences between the larger species between the 2 labs each month and each year (for example, cyanophyceae, Chlorophyceae, etc.) and I’m wondering if you could put a table together of the % differences?
+
+biov_by_class = d |> 
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  dplyr::select(-c(edibility,DB.cells.ml,LV.cells.ml)) |> 
+  tidyr::pivot_longer(cols = c(DB.mm3.l, LV.mm3.l)) |> 
+  dplyr::mutate(lab = ifelse(stringr::str_detect(name,"^DB"),"Darren","Lidija")) |> 
+  dplyr::group_by(project, year, month, basin, lab, class.name) |>
+  # Find the sum of biovolume per class name; keep the top two.
+  dplyr::mutate(biov_of_class = sum(value,na.rm=T)) |> 
+  dplyr::arrange(project,year,month,basin,lab,class.name,dplyr::desc(biov_of_class)) |> 
+  dplyr::ungroup()
+
+
+# paired t-test by class.name and lab.
+# Trying it out for 2023, Apr, Flagellates
+d_t = d |> 
+  dplyr::filter(project == 'Alouette', year == 2023, month == 'Apr', basin == 'NB') |> 
+  dplyr::mutate(the_row = dplyr::row_number()) |> 
+  dplyr::select(-c(DB.cells.ml,LV.cells.ml))
+
+lab_paired_t_test_results = d |> 
+  dplyr::group_by(project, year, month, basin) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    tryCatch(
+      expr = {
+        t.test(.x$DB.mm3.l, .x$LV.mm3.l, paired = T) |> 
+          broom::tidy() |> 
+          dplyr::mutate(test_run = TRUE,
+                        project = unique(.x$project), 
+                        year = unique(.x$year),
+                        month = unique(.x$month),
+                        basin = unique(.x$basin)) |> 
+          dplyr::select(test_run,project,year,month,basin,dplyr::everything())},
+      error = function(e) return(data.frame(test_run = FALSE))
+    )
+  },.progress=T) |> 
+  dplyr::bind_rows()
+
+lab_paired_t_test_box_plots = lab_paired_t_test_results |> 
+  dplyr::filter(p.value < 0.05) |> 
+  dplyr::group_by(project, year, month, basin) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    d |> 
+      dplyr::filter(year == .x$year, month == .x$month,
+                    basin == .x$basin, project == .x$project) |> 
+      dplyr::select(-c(DB.cells.ml,LV.cells.ml)) |> 
+      tidyr::pivot_longer(cols = c(DB.mm3.l,LV.mm3.l)) |> 
+      ggplot(aes(x = class.name, y = value, fill = name)) + 
+      geom_boxplot() + 
+      labs(x = "Class", y = "Biovolume", fill = "Lab",
+           title = paste0("Significant Differences between Labs by Class"),
+           subtitle = paste0(.x$month," ",.x$year,", ",.x$basin,", ",.x$project)) + 
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+  })
+
+biov_by_class
+```
+
+```{r}
+lab_paired_t_test_box_plots
 ```
 
 ## Lab Comparison Plots {.tabset}
