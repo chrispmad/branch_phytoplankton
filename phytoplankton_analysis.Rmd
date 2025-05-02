@@ -19,6 +19,9 @@ library(ggpubr)
 
 d = readxl::read_excel("output/data_both_projects_rolled_up.xlsx")
 
+d = d |> 
+  dplyr::mutate(month = factor(month, levels = month.abb))
+
 col_scheme = ggplot2::scale_fill_manual(
   values = c("Cyanophyceae" = 'lightblue',
              "Chlorophyceae" = 'orange',
@@ -28,29 +31,45 @@ col_scheme = ggplot2::scale_fill_manual(
 )
 
 my_plot_theme = theme_minimal() + 
-  theme(axis.text = element_text(size = 13),
-        axis.title = element_text(size = 15))
+  theme(axis.text = element_text(size = 10),
+        axis.title = ggtext::element_markdown(size = 13))
 ```
 
 ```{r create_plotting_functions}
-make_plot_by_month = function(d,vars,var_label,proj, species_count = F){
-  if(!species_count){
+make_plot_by_month = function(d,
+                              vars,
+                              var_label, 
+                              plot_type = NA,
+                              t_test_results = NULL){
+  
+  if(plot_type == 'classes_by_month'){
     d_summarised = d |> 
       tidyr::pivot_longer(cols = vars, names_to = "lab", values_to = 'y') |> 
       dplyr::mutate(lab = ifelse(stringr::str_detect(lab,"^DB"),"Darren","Lidija")) |> 
-      dplyr::filter(project == proj) |> 
       dplyr::group_by(project, year, basin, month, class.name, lab) |> 
       dplyr::reframe(y = sum(y, na.rm=T))
     
-    ggplot(d_summarised, 
-           aes(x = month, y = y, fill = class.name)) + 
+    # t_test_for_plot = t_test_results |> 
+    #               dplyr::filter(project == unique(d_summarised$project),
+    #                             year == unique(d_summarised$year)) |> 
+    #   dplyr::left_join(d_summarised |> 
+    #                      dplyr::group_by(month,basin,lab) |> 
+    #                      dplyr::reframe(max_y = max(y)))
+    
+    p = ggplot(d_summarised, 
+               aes(x = month)) + 
       col_scheme +
-      geom_col() + 
-      labs(y = paste0("Phytoplankton ", var_label), fill = '') +
-      facet_wrap(basin ~ lab, ncol = 2, strip.position = "right") +
+      geom_col(aes(y = y, fill = class.name)) +
+      # geom_text(aes(y = max(d_summarised$y), label = ifelse(p.value < 0.05, '*', '')),
+      # data = t_test_for_plot) +
+      labs(y = paste0("Phytoplankton ", var_label), fill = '',
+           x = "Month") +
+      facet_wrap(lab ~ basin, ncol = 2, strip.position = "right") +
+      my_plot_theme +
       theme(legend.position = 'bottom') + 
-      my_plot_theme
-  } else {
+      coord_cartesian(clip = 'off')
+  } 
+  if(plot_type == 'species_richness'){
     # Darren's data
     db_d = d |> 
       dplyr::select(project, year, basin, month, DB.cells.ml, DB.mm3.l, spp) |> 
@@ -67,18 +86,62 @@ make_plot_by_month = function(d,vars,var_label,proj, species_count = F){
       dplyr::count(project, year, basin, month) |> 
       dplyr::mutate(lab = 'Lidija')
     
-    d_for_plot = dplyr::bind_rows(db_d, lv_d) |> 
-      dplyr::filter(project == proj)
+    d_for_plot = dplyr::bind_rows(db_d, lv_d)#|> 
+    # dplyr::filter(project == proj)
     
-    ggplot(d_for_plot, 
-           aes(x = month, y = n)) + 
+    p = ggplot(d_for_plot, 
+               aes(x = month, y = n)) + 
       geom_point() + 
       scale_y_continuous(limits = c(0, max(d_for_plot$n)), breaks = seq(0,50,5)) +
-      labs(y = paste0("Phytoplankton ", var_label)) +
-      facet_wrap(basin ~ lab, ncol = 2, strip.position = "right") +
+      labs(y = paste0("Phytoplankton ", var_label),
+           x = "Month") +
+      facet_wrap(lab ~ basin, ncol = 2, strip.position = "right") +
       theme(legend.position = 'bottom') + 
       my_plot_theme
   }
+  if(plot_type == 'edibility'){
+    
+    # Darren's data
+    db_d = d |> 
+      dplyr::select(project, year, basin, month, edibility, DB.cells.ml, DB.mm3.l, spp) |> 
+      # Ensure rows we're keeping rows where DB reported values
+      dplyr::filter(DB.cells.ml != 0, DB.mm3.l != 0, !is.na(DB.cells.ml), !is.na(DB.mm3.l)) |> 
+      dplyr::count(project, year, basin, month, edibility) |> 
+      dplyr::mutate(lab = 'Darren')
+    
+    # Lidija's data
+    lv_d = d |> 
+      dplyr::select(project, year, basin, month, 
+                    edibility, LV.cells.ml, LV.mm3.l, spp) |> 
+      # Ensure rows we're keeping rows where DB reported values
+      dplyr::filter(LV.cells.ml != 0, LV.mm3.l != 0, !is.na(LV.cells.ml), !is.na(LV.mm3.l)) |> 
+      dplyr::count(project, year, basin, month, edibility) |> 
+      dplyr::mutate(lab = 'Lidija')
+    
+    d_for_plot = dplyr::bind_rows(db_d, lv_d)
+    
+    # t_test_for_plot = t_test_results |> 
+    #               dplyr::filter(project == unique(d_for_plot$project),
+    #                             year == unique(d_for_plot$year)) |> 
+    #   dplyr::left_join(d_for_plot |> 
+    #                      dplyr::group_by(month,basin,lab) |> 
+    #                      dplyr::reframe(max_y = max(n)))
+    
+    # browser()
+    p = ggplot(d_for_plot, 
+               aes(x = month, y = n, fill = lab)) + 
+      geom_col(position = position_dodge()) + 
+      # geom_text(aes(y = max(d_for_plot$n), label = ifelse(p.value < 0.05, '*', '')),
+      # data = t_test_for_plot) +
+      scale_y_continuous(limits = c(0, max(d_for_plot$n)), breaks = seq(0,50,5)) +
+      labs(y = paste0("Phytoplankton Species Counts by ", var_label),
+           x = "Month") +
+      facet_wrap(edibility ~ basin, ncol = 2, strip.position = "right") +
+      my_plot_theme + 
+      theme(legend.position = 'bottom') + 
+      scale_fill_brewer(palette = "Set2")
+  }
+  p
 }
 
 ```
@@ -105,93 +168,132 @@ d |>
 
 ### Pairwise T-test {.tabset}
 
-#### Table
-
-```{r}
-d_for_t_tests = d |> 
-  tidyr::pivot_longer(cols = c(starts_with("DB"),starts_with("LV")), names_to = "var", values_to = 'value') |> 
-  dplyr::mutate(lab = ifelse(stringr::str_detect(var,"^DB"),"Darren","Lidija")) |> 
-  dplyr::mutate(var_full = stringr::str_remove(var,"^[A-Z]{2}\\.")) |> 
-  dplyr::mutate(var_full = ifelse(var_full == 'cells.ml', 'abundance','biovolume')) |> 
-  dplyr::select(project, year, lab, basin, var_full, value) |> 
-  group_by(project, year, basin, var_full) |> 
-  group_split()
-
-t_test_results = d_for_t_tests |> 
-  purrr::map( ~ {
-    rstatix::pairwise_t_test(
-      data = .x,
-      value ~ lab, pool.sd = FALSE,
-      p.adjust.method = "bonferroni"
-    ) |> 
-      dplyr::mutate(variable = unique(.x$var_full),
-                    year = unique(.x$year),
-                    basin = unique(.x$basin),
-                    project = unique(.x$project)) |> 
-      dplyr::select(variable,year,basin,project, group1:p.adj.signif)
-  }) |> 
-  dplyr::bind_rows()
-
-knitr::kable(t_test_results)
-
-t_test_results_xy = t_test_results |> 
-  add_xy_position(x = "lab", step.increase = 1)
-
-boxplot_res_l = d_for_t_tests |> 
-  purrr::map( ~ {
-    filters = .x |> dplyr::select(var_full, basin, year, project, variable = var_full) |> dplyr::distinct()
-    
-    relevant_t_test_results = t_test_results_xy |> 
-      dplyr::inner_join(filters, by = join_by(variable, year, basin, project))
-    
-    y_var_label = ifelse(relevant_t_test_results$variable == "abundance",
-                         "Phytoplankton Abundance (cells*mL^-1)",
-                         "Phytoplankton Biovolume (mm^3*L^-1)")
-    
-    ggboxplot(.x, x = "lab", y = "value") +
-      stat_pvalue_manual(relevant_t_test_results, hide.ns = TRUE) +
-      labs(x = "Lab", y = y_var_label,
-           title = paste0(relevant_t_test_results$project," ",
-                          relevant_t_test_results$basin,", ",
-                          relevant_t_test_results$year,": ",
-                          str_to_title(relevant_t_test_results$variable),
-                          " (adj. p-value: ",
-                          relevant_t_test_results$p.adj,
-                          ")"))
-  })
-
-```
-
-#### Boxplots
-```{r}
-boxplot_res_l
-```
-
-#### Significant Differences
-
-```{r}
+```{r perform_paired_t_test}
 #1.	Can you look to see if there are significant differences between the larger species between the 2 labs each month and each year (for example, cyanophyceae, Chlorophyceae, etc.) and I’m wondering if you could put a table together of the % differences?
 
-biov_by_class = d |> 
-  dplyr::filter(year == 2023, project == 'Alouette') |> 
-  dplyr::select(-c(edibility,DB.cells.ml,LV.cells.ml)) |> 
-  tidyr::pivot_longer(cols = c(DB.mm3.l, LV.mm3.l)) |> 
-  dplyr::mutate(lab = ifelse(stringr::str_detect(name,"^DB"),"Darren","Lidija")) |> 
-  dplyr::group_by(project, year, month, basin, lab, class.name) |>
-  # Find the sum of biovolume per class name; keep the top two.
-  dplyr::mutate(biov_of_class = sum(value,na.rm=T)) |> 
-  dplyr::arrange(project,year,month,basin,lab,class.name,dplyr::desc(biov_of_class)) |> 
-  dplyr::ungroup()
-
+# biov_by_class = d |> 
+#   dplyr::filter(year == 2023, project == 'Alouette') |> 
+#   dplyr::select(-c(edibility,DB.cells.ml,LV.cells.ml)) |> 
+#   tidyr::pivot_longer(cols = c(DB.mm3.l, LV.mm3.l)) |> 
+#   dplyr::mutate(lab = ifelse(stringr::str_detect(name,"^DB"),"Darren","Lidija")) |> 
+#   dplyr::group_by(project, year, month, basin, lab, class.name) |>
+#   # Find the sum of biovolume per class name; keep the top two.
+#   dplyr::mutate(biov_of_class = sum(value,na.rm=T)) |> 
+#   dplyr::arrange(project,year,month,basin,lab,class.name,dplyr::desc(biov_of_class)) |> 
+#   dplyr::ungroup()
 
 # paired t-test by class.name and lab.
 # Trying it out for 2023, Apr, Flagellates
-d_t = d |> 
-  dplyr::filter(project == 'Alouette', year == 2023, month == 'Apr', basin == 'NB') |> 
-  dplyr::mutate(the_row = dplyr::row_number()) |> 
-  dplyr::select(-c(DB.cells.ml,LV.cells.ml))
+# d_t = d |> 
+#   dplyr::filter(project == 'Alouette', year == 2023, month == 'Apr', basin == 'NB') |> 
+#   dplyr::mutate(the_row = dplyr::row_number()) |> 
+#   dplyr::select(-c(DB.cells.ml,LV.cells.ml))
 
-lab_paired_t_test_results = d |> 
+# This pairing of t-tests is for Abundance
+abund_lab_paired_t_test_results_within_class = d |> 
+  dplyr::group_by(project, year, month, basin, class.name) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    tryCatch(
+      expr = {
+        t.test(.x$DB.cells.ml, .x$LV.cells.ml, paired = T) |> 
+          broom::tidy() |> 
+          dplyr::mutate(test_run = TRUE,
+                        project = unique(.x$project), 
+                        year = unique(.x$year),
+                        month = unique(.x$month),
+                        basin = unique(.x$basin),
+                        class.name = unique(.x$class.name),
+                        DB_mean = round(mean(.x$DB.cells.ml),5),
+                        LV_mean = round(mean(.x$LV.cells.ml),5)) |> 
+          dplyr::rename(number.rows = parameter) |> 
+          dplyr::select(test_run,project,year,month,basin,class.name,DB_mean,LV_mean,dplyr::everything())},
+      error = function(e) return(
+        data.frame(
+          test_run = FALSE,
+          project = unique(.x$project), 
+          year = unique(.x$year),
+          month = unique(.x$month),
+          basin = unique(.x$basin),
+          class.name = unique(.x$class.name),
+          number.rows = nrow(.x),
+          DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
+          LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+    )
+  },.progress=T) |> 
+  dplyr::bind_rows() |> 
+  tidyr::as_tibble()
+
+# Also do this where we put all classes together inside each month.
+abund_lab_paired_t_test_results = d |> 
+  dplyr::group_by(project, year, month, basin) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    tryCatch(
+      expr = {
+        t.test(.x$DB.cells.ml, .x$LV.cells.ml, paired = T) |> 
+          broom::tidy() |> 
+          dplyr::mutate(test_run = TRUE,
+                        project = unique(.x$project), 
+                        year = unique(.x$year),
+                        month = unique(.x$month),
+                        basin = unique(.x$basin),
+                        DB_mean = round(mean(.x$DB.cells.ml),5),
+                        LV_mean = round(mean(.x$LV.cells.ml),5)) |> 
+          dplyr::rename(number.rows = parameter) |> 
+          dplyr::select(test_run,project,year,month,basin,DB_mean,LV_mean,dplyr::everything())},
+      error = function(e) return(
+        data.frame(
+          test_run = FALSE,
+          project = unique(.x$project), 
+          year = unique(.x$year),
+          month = unique(.x$month),
+          basin = unique(.x$basin),
+          number.rows = nrow(.x),
+          DB_mean = round(mean(.x$DB.cells.ml,na.rm=T),5),
+          LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+    )
+  },.progress=T) |> 
+  dplyr::bind_rows() |> 
+  tidyr::as_tibble()
+
+# This pairing of t-tests is for Biovolume.
+biov_lab_paired_t_test_results_within_class = d |> 
+  dplyr::group_by(project, year, month, basin, class.name) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    tryCatch(
+      expr = {
+        t.test(.x$DB.mm3.l, .x$LV.mm3.l, paired = T) |> 
+          broom::tidy() |> 
+          dplyr::mutate(test_run = TRUE,
+                        project = unique(.x$project), 
+                        year = unique(.x$year),
+                        month = unique(.x$month),
+                        basin = unique(.x$basin),
+                        class.name = unique(.x$class.name),
+                        DB_mean = round(mean(.x$DB.mm3.l),5),
+                        LV_mean = round(mean(.x$LV.mm3.l),5)) |> 
+          dplyr::rename(number.rows = parameter) |> 
+          dplyr::select(test_run,project,year,month,basin,class.name,DB_mean,LV_mean,dplyr::everything())},
+      error = function(e) return(
+        data.frame(
+          test_run = FALSE,
+          project = unique(.x$project), 
+          year = unique(.x$year),
+          month = unique(.x$month),
+          basin = unique(.x$basin),
+          class.name = unique(.x$class.name),
+          number.rows = nrow(.x),
+          DB_mean = round(mean(.x$DB.mm3.l,na.rm=T),5),
+          LV_mean = round(mean(.x$LV.mm3.l,na.rm=T),5)))
+    )
+  },.progress=T) |> 
+  dplyr::bind_rows() |> 
+  tidyr::as_tibble()
+
+# Also do this where we put all classes together inside each month.
+biov_lab_paired_t_test_results = d |> 
   dplyr::group_by(project, year, month, basin) |> 
   dplyr::group_split() |> 
   purrr::map( ~ {
@@ -203,16 +305,48 @@ lab_paired_t_test_results = d |>
                         project = unique(.x$project), 
                         year = unique(.x$year),
                         month = unique(.x$month),
-                        basin = unique(.x$basin)) |> 
-          dplyr::select(test_run,project,year,month,basin,dplyr::everything())},
-      error = function(e) return(data.frame(test_run = FALSE))
+                        basin = unique(.x$basin),
+                        DB_mean = round(mean(.x$DB.mm3.l),5),
+                        LV_mean = round(mean(.x$LV.mm3.l),5)) |> 
+          dplyr::rename(number.rows = parameter) |> 
+          dplyr::select(test_run,project,year,month,basin,DB_mean,LV_mean,dplyr::everything())},
+      error = function(e) return(
+        data.frame(
+          test_run = FALSE,
+          project = unique(.x$project), 
+          year = unique(.x$year),
+          month = unique(.x$month),
+          basin = unique(.x$basin),
+          number.rows = nrow(.x),
+          DB_mean = round(mean(.x$DB.mm3.l,na.rm=T),5),
+          LV_mean = round(mean(.x$LV.mm3.l,na.rm=T),5)))
     )
   },.progress=T) |> 
-  dplyr::bind_rows()
+  dplyr::bind_rows() |> 
+  tidyr::as_tibble()
 
-lab_paired_t_test_box_plots = lab_paired_t_test_results |> 
+abund_lab_paired_t_test_box_plots = abund_lab_paired_t_test_results_within_class |> 
   dplyr::filter(p.value < 0.05) |> 
-  dplyr::group_by(project, year, month, basin) |> 
+  dplyr::group_by(project, year, month, basin, class.name) |> 
+  dplyr::group_split() |> 
+  purrr::map( ~ {
+    d |> 
+      dplyr::filter(year == .x$year, month == .x$month,
+                    basin == .x$basin, project == .x$project) |> 
+      dplyr::select(-c(DB.mm3.l,LV.mm3.l)) |> 
+      tidyr::pivot_longer(cols = c(DB.cells.ml,LV.cells.ml)) |> 
+      ggplot(aes(x = class.name, y = value, fill = name)) + 
+      geom_boxplot() + 
+      labs(x = "Class", y = "Cell Count", fill = "Lab",
+           title = paste0("Classes with Significantly Different Cell Numbers between Labs"),
+           subtitle = paste0(.x$month," ",.x$year,", ",.x$basin,", ",.x$project)) + 
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
+  })
+
+
+biov_lab_paired_t_test_box_plots = biov_lab_paired_t_test_results_within_class |> 
+  dplyr::filter(p.value < 0.05) |> 
+  dplyr::group_by(project, year, month, basin, class.name) |> 
   dplyr::group_split() |> 
   purrr::map( ~ {
     d |> 
@@ -223,16 +357,72 @@ lab_paired_t_test_box_plots = lab_paired_t_test_results |>
       ggplot(aes(x = class.name, y = value, fill = name)) + 
       geom_boxplot() + 
       labs(x = "Class", y = "Biovolume", fill = "Lab",
-           title = paste0("Significant Differences between Labs by Class"),
+           title = paste0("Classes with Significantly Different Biovolume between Labs"),
            subtitle = paste0(.x$month," ",.x$year,", ",.x$basin,", ",.x$project)) + 
       theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1))
   })
+```
 
-biov_by_class
+#### Table {.tabset}
+
+Note 1: These T-tests compare the Abundance Biovolume recordings of Darren and Lidija by project, year, month, basin; an additional pair of tests also split th data by class name. Some of these data 'cuts' had too few rows of data to run the test (e.g. a single row): see column "number.rows" to see the total number of rows of data for both labs combined.
+
+Note 2: percent difference of mean Biovolume is calculated as $100*(A-B)/((A+B)/2)$, where *A* is Darren's lab's values (`DB.mm3.l`) and *B* is Lidija's lab's values (`LV.mm3.l`).
+
+##### T-Test for Classes Separately
+
+Abundance:
+```{r}
+abund_lab_paired_t_test_results_within_class |> 
+  dplyr::filter(!is.na(class.name)) |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
+
+Biovolume: 
+```{r}
+biov_lab_paired_t_test_results_within_class |> 
+  dplyr::filter(!is.na(class.name)) |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
+
+##### T-Tests by Month (Classes Combined)
+
+Abundance:
+```{r}
+abund_lab_paired_t_test_results |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
+
+Biovolume:
+```{r}
+biov_lab_paired_t_test_results |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
+
+#### Boxplots
+
+```{r}
+abund_lab_paired_t_test_box_plots
 ```
 
 ```{r}
-lab_paired_t_test_box_plots
+biov_lab_paired_t_test_box_plots
 ```
 
 ## Lab Comparison Plots {.tabset}
@@ -240,83 +430,163 @@ lab_paired_t_test_box_plots
 ### Wahleach {.tabset}
 
 #### Abundance by Month - 2023
+
 ```{r}
 d |> 
-  dplyr::filter(year == 2023) |> 
+  dplyr::filter(year == 2023, project == 'Wahleach') |> 
   make_plot_by_month(vars = c("DB.cells.ml","LV.cells.ml"),
-                     var_label = "Abundance (cells*mL^-1)", 
-                     proj = 'Wahleach')
+                     var_label = "Abundance (cells*mL<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
 
 #### Abundance by Month - 2024
+
 ```{r}
-make_plot_by_month(d[d$year == 2024,], vars = c("DB.cells.ml","LV.cells.ml"), "Abundance (cells*mL^-1)", proj = 'Wahleach')
+d |> 
+  dplyr::filter(year == 2024, project == 'Wahleach') |> 
+  make_plot_by_month(vars = c("DB.cells.ml","LV.cells.ml"),
+                     var_label = "Abundance (cells*mL<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
 
 #### Biovolume by Month - 2023
+
 ```{r}
-make_plot_by_month(d[d$year == 2023,], vars = c("DB.mm3.l","LV.mm3.l"), "Biovolume (mm^3*L^-1)", proj = 'Wahleach')
+d |> 
+  dplyr::filter(year == 2023, project == 'Wahleach') |> 
+  make_plot_by_month(vars = c("DB.mm3.l","LV.mm3.l"), 
+                     var_label = "Biovolume (mm<sup>3</sup> * L<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = biov_lab_paired_t_test_results)
 ```
 
 #### Biovolume by Month - 2024
+
 ```{r}
-make_plot_by_month(d[d$year == 2024,], vars = c("DB.mm3.l","LV.mm3.l"), "Biovolume (mm^3*L^-1)", proj = 'Wahleach')
+d |> 
+  dplyr::filter(year == 2024, project == 'Wahleach') |> 
+  make_plot_by_month(vars = c("DB.mm3.l","LV.mm3.l"), 
+                     var_label = "Biovolume (mm<sup>3</sup> * L<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = biov_lab_paired_t_test_results)
 ```
 
 #### Species Richness by Month - 2023
+
 ```{r}
 d |> 
-  dplyr::filter(year == 2023) |> 
-  make_plot_by_month(var_label = "Species Richness Count", 
-                     proj = 'Wahleach', 
-                     species_count = T)
+  dplyr::filter(year == 2023, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Species Richness Count",
+                     plot_type = 'species_richness')
 ```
 
 #### Species Richness by Month - 2024
+
 ```{r}
 d |> 
-  dplyr::filter(year == 2024) |> 
-  make_plot_by_month(var_label = "Species Richness Count", 
-                     proj = 'Wahleach', 
-                     species_count = T)
+  dplyr::filter(year == 2024, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Species Richness Count",
+                     plot_type = 'species_richness')
+```
+
+#### Edibility by Month - 2023
+```{r}
+d |> 
+  dplyr::filter(year == 2023, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
+#### Edibility by Month - 2024
+```{r}
+d |> 
+  dplyr::filter(year == 2024, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
 
 ### Alouette {.tabset}
 
 #### Abundance by Month - 2023
+
 ```{r}
-make_plot_by_month(d[d$year == 2023,], vars = c("DB.cells.ml","LV.cells.ml"), "Abundance (cells*mL^-1)", proj = 'Alouette')
+d |> 
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  make_plot_by_month(vars = c("DB.cells.ml","LV.cells.ml"),
+                     var_label = "Abundance (cells*mL<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
 
 #### Abundance by Month - 2024
+
 ```{r}
-make_plot_by_month(d[d$year == 2024,], vars = c("DB.cells.ml","LV.cells.ml"), "Abundance (cells*mL^-1)", proj = 'Alouette')
+d |> 
+  dplyr::filter(year == 2024, project == 'Alouette') |> 
+  make_plot_by_month(vars = c("DB.cells.ml","LV.cells.ml"),
+                     var_label = "Abundance (cells*mL<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
 
 #### Biovolume by Month - 2023
+
 ```{r}
-make_plot_by_month(d[d$year == 2023,], vars = c("DB.mm3.l","LV.mm3.l"), "Biovolume (mm^3*L^-1)", proj = 'Alouette')
+d |> 
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  make_plot_by_month(vars = c("DB.mm3.l","LV.mm3.l"), 
+                     var_label = "Biovolume (mm<sup>3</sup> * L<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = biov_lab_paired_t_test_results)
 ```
 
 #### Biovolume by Month - 2024
+
 ```{r}
-make_plot_by_month(d[d$year == 2024,], vars = c("DB.mm3.l","LV.mm3.l"), "Biovolume (mm^3*L^-1)", proj = 'Alouette')
+d |> 
+  dplyr::filter(year == 2024, project == 'Alouette') |> 
+  make_plot_by_month(vars = c("DB.mm3.l","LV.mm3.l"), 
+                     var_label = "Biovolume (mm<sup>3</sup> * L<sup>-1</sup>)",
+                     plot_type = 'classes_by_month',
+                     t_test_results = biov_lab_paired_t_test_results)
 ```
 
 #### Species Richness by Month - 2023
+
 ```{r}
 d |> 
-  dplyr::filter(year == 2023) |> 
-  make_plot_by_month(var_label = "Species Richness Count", 
-                     proj = 'Alouette', 
-                     species_count = T)
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Species Richness Count",
+                     plot_type = 'species_richness')
 ```
 
 #### Species Richness by Month - 2024
+
 ```{r}
 d |> 
-  dplyr::filter(year == 2024) |> 
-  make_plot_by_month(var_label = "Species Richness Count", 
-                     proj = 'Alouette', 
-                     species_count = T)
+  dplyr::filter(year == 2024, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Species Richness Count",
+                     plot_type = 'species_richness')
+```
+
+#### Edibility by Month - 2023
+```{r}
+d |> 
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
+#### Edibility by Month - 2024
+```{r}
+d |> 
+  dplyr::filter(year == 2024, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility',
+                     t_test_results = abund_lab_paired_t_test_results)
 ```
