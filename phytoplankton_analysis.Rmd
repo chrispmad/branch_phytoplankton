@@ -16,6 +16,7 @@ library(plotly)
 library(patchwork)
 library(rstatix)
 library(ggpubr)
+library(confintr)
 
 d = readxl::read_excel("output/data_both_projects_rolled_up.xlsx")
 
@@ -33,6 +34,76 @@ col_scheme = ggplot2::scale_fill_manual(
 my_plot_theme = theme_minimal() + 
   theme(axis.text = element_text(size = 10),
         axis.title = ggtext::element_markdown(size = 13))
+
+# Functions #
+
+run_t_test = function(dat,var_name){
+  dat |> 
+    purrr::map( ~ {
+      number_rows = nrow(.x)
+      tryCatch(
+        expr = {
+          t.test(.x[[paste0("DB.",var_name)]], .x[[paste0("LV.",var_name)]], paired = T) |> 
+            broom::tidy() |> 
+            dplyr::mutate(test_run = TRUE,
+                          project = unique(.x$project), 
+                          year = unique(.x$year),
+                          month = unique(.x$month),
+                          basin = unique(.x$basin),
+                          DB_mean = round(mean(.x$DB.cells.ml),5),
+                          LV_mean = round(mean(.x$LV.cells.ml),5),
+                          number_rows = number_rows) |> 
+            dplyr::select(test_run,project,year,month,basin,DB_mean,LV_mean,dplyr::everything())},
+        error = function(e) return(
+          data.frame(
+            test_run = FALSE,
+            project = unique(.x$project), 
+            year = unique(.x$year),
+            month = unique(.x$month),
+            basin = unique(.x$basin),
+            number_rows = number_rows,
+            DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
+            LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+      )
+    },.progress=T) |> 
+    dplyr::bind_rows() |> 
+    tidyr::as_tibble()
+}
+
+run_t_test_class = function(dat,var_name){
+  dat |> 
+    purrr::map( ~ {
+      number_rows = nrow(.x)
+      tryCatch(
+        expr = {
+          t.test(.x[[paste0("DB.",var_name)]], .x[[paste0("LV.",var_name)]], paired = T) |> 
+            broom::tidy() |> 
+            dplyr::mutate(test_run = TRUE,
+                          project = unique(.x$project), 
+                          year = unique(.x$year),
+                          month = unique(.x$month),
+                          basin = unique(.x$basin),
+                          class.name = unique(.x$class.name),
+                          DB_mean = round(mean(.x$DB.cells.ml),5),
+                          LV_mean = round(mean(.x$LV.cells.ml),5),
+                          number_rows = number_rows) |> 
+            dplyr::select(test_run,project,year,month,basin,class.name,DB_mean,LV_mean,dplyr::everything())},
+        error = function(e) return(
+          data.frame(
+            test_run = FALSE,
+            project = unique(.x$project), 
+            year = unique(.x$year),
+            month = unique(.x$month),
+            basin = unique(.x$basin),
+            class.name = unique(.x$class.name),
+            number_rows = number_rows,
+            DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
+            LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+      )
+    },.progress=T) |> 
+    dplyr::bind_rows() |> 
+    tidyr::as_tibble()
+}
 ```
 
 ```{r create_plotting_functions}
@@ -153,177 +224,67 @@ make_plot_by_month = function(d,
 ### Descriptive Statistics
 
 ```{r}
+# d |> 
+#   tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l)) |> 
+#   dplyr::group_by(name) |> 
+#   dplyr::reframe(min_value = min(value),
+#                  max_value = max(value),
+#                  median_value = median(value),
+#                  mean_value = mean(value)) |> 
+#   dplyr::arrange(dplyr::desc(max_value)) |> 
+#   dplyr::rename(variable = name) |> 
+#   knitr::kable()
+```
+
+```{r descriptive_stats_by_class_and_lab}
 d |> 
   tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l)) |> 
-  dplyr::mutate(value = round(value, 4)) |> 
-  dplyr::group_by(name) |> 
-  dplyr::reframe(min_value = min(value),
-                 max_value = max(value),
-                 median_value = median(value),
-                 mean_value = mean(value)) |> 
-  dplyr::arrange(dplyr::desc(max_value)) |> 
-  dplyr::rename(variable = name) |> 
+  dplyr::mutate(value = value, 4) |> 
+  dplyr::group_by(name, class.name) |> 
+  dplyr::reframe(mean_value = round(mean(value,na.rm=T),3),
+                 low_cf_int = round(ci_mean(value)[[2]][1],3),
+                 upper_cf_int = round(ci_mean(value)[[2]][2],3)) |> 
+  dplyr::mutate(mean_w_CI = paste0(mean_value, " (95%CI: ",low_cf_int," - ",upper_cf_int,")")) |> 
+  dplyr::select(name,class.name,mean_w_CI) |> 
+  dplyr::mutate(lab = ifelse(stringr::str_detect(name,"^DB"),"DB","LV")) |>
+  dplyr::mutate(variable = ifelse(stringr::str_detect(name,"cells"),"abundance","biovolume")) |>
+  dplyr::mutate(variable = paste0(variable, "_",lab)) |> 
+  dplyr::select(-c(name,lab)) |>  
+  tidyr::pivot_wider(names_from = variable, values_from = mean_w_CI) |> 
+  dplyr::select(class.name,abundance_DB,abundance_LV,dplyr::everything()) |> 
   knitr::kable()
 ```
+
+We see some fairly large differences in the means and their confidence intervals, but to test if they are significantly difference, I think we need to split the data by project, year, and basin, in addition to class name. See the 'Pairwise T-test' tab for these results.
 
 ### Pairwise T-test {.tabset}
 
 ```{r perform_paired_t_test}
 #1.	Can you look to see if there are significant differences between the larger species between the 2 labs each month and each year (for example, cyanophyceae, Chlorophyceae, etc.) and I’m wondering if you could put a table together of the % differences?
 
-# biov_by_class = d |> 
-#   dplyr::filter(year == 2023, project == 'Alouette') |> 
-#   dplyr::select(-c(edibility,DB.cells.ml,LV.cells.ml)) |> 
-#   tidyr::pivot_longer(cols = c(DB.mm3.l, LV.mm3.l)) |> 
-#   dplyr::mutate(lab = ifelse(stringr::str_detect(name,"^DB"),"Darren","Lidija")) |> 
-#   dplyr::group_by(project, year, month, basin, lab, class.name) |>
-#   # Find the sum of biovolume per class name; keep the top two.
-#   dplyr::mutate(biov_of_class = sum(value,na.rm=T)) |> 
-#   dplyr::arrange(project,year,month,basin,lab,class.name,dplyr::desc(biov_of_class)) |> 
-#   dplyr::ungroup()
-
-# paired t-test by class.name and lab.
-# Trying it out for 2023, Apr, Flagellates
-# d_t = d |> 
-#   dplyr::filter(project == 'Alouette', year == 2023, month == 'Apr', basin == 'NB') |> 
-#   dplyr::mutate(the_row = dplyr::row_number()) |> 
-#   dplyr::select(-c(DB.cells.ml,LV.cells.ml))
-
 # This pairing of t-tests is for Abundance
-abund_lab_paired_t_test_results_within_class = d |> 
+abund_lab_paired_t_test_results_within_class =  d |> 
   dplyr::group_by(project, year, month, basin, class.name) |> 
   dplyr::group_split() |> 
-  purrr::map( ~ {
-    tryCatch(
-      expr = {
-        t.test(.x$DB.cells.ml, .x$LV.cells.ml, paired = T) |> 
-          broom::tidy() |> 
-          dplyr::mutate(test_run = TRUE,
-                        project = unique(.x$project), 
-                        year = unique(.x$year),
-                        month = unique(.x$month),
-                        basin = unique(.x$basin),
-                        class.name = unique(.x$class.name),
-                        DB_mean = round(mean(.x$DB.cells.ml),5),
-                        LV_mean = round(mean(.x$LV.cells.ml),5)) |> 
-          dplyr::rename(number.rows = parameter) |> 
-          dplyr::select(test_run,project,year,month,basin,class.name,DB_mean,LV_mean,dplyr::everything())},
-      error = function(e) return(
-        data.frame(
-          test_run = FALSE,
-          project = unique(.x$project), 
-          year = unique(.x$year),
-          month = unique(.x$month),
-          basin = unique(.x$basin),
-          class.name = unique(.x$class.name),
-          number.rows = nrow(.x),
-          DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
-          LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
-    )
-  },.progress=T) |> 
-  dplyr::bind_rows() |> 
-  tidyr::as_tibble()
+  run_t_test_class('cells.ml')
 
 # Also do this where we put all classes together inside each month.
 abund_lab_paired_t_test_results = d |> 
   dplyr::group_by(project, year, month, basin) |> 
   dplyr::group_split() |> 
-  purrr::map( ~ {
-    tryCatch(
-      expr = {
-        t.test(.x$DB.cells.ml, .x$LV.cells.ml, paired = T) |> 
-          broom::tidy() |> 
-          dplyr::mutate(test_run = TRUE,
-                        project = unique(.x$project), 
-                        year = unique(.x$year),
-                        month = unique(.x$month),
-                        basin = unique(.x$basin),
-                        DB_mean = round(mean(.x$DB.cells.ml),5),
-                        LV_mean = round(mean(.x$LV.cells.ml),5)) |> 
-          dplyr::rename(number.rows = parameter) |> 
-          dplyr::select(test_run,project,year,month,basin,DB_mean,LV_mean,dplyr::everything())},
-      error = function(e) return(
-        data.frame(
-          test_run = FALSE,
-          project = unique(.x$project), 
-          year = unique(.x$year),
-          month = unique(.x$month),
-          basin = unique(.x$basin),
-          number.rows = nrow(.x),
-          DB_mean = round(mean(.x$DB.cells.ml,na.rm=T),5),
-          LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
-    )
-  },.progress=T) |> 
-  dplyr::bind_rows() |> 
-  tidyr::as_tibble()
+  run_t_test('cells.ml')
 
 # This pairing of t-tests is for Biovolume.
 biov_lab_paired_t_test_results_within_class = d |> 
   dplyr::group_by(project, year, month, basin, class.name) |> 
   dplyr::group_split() |> 
-  purrr::map( ~ {
-    tryCatch(
-      expr = {
-        t.test(.x$DB.mm3.l, .x$LV.mm3.l, paired = T) |> 
-          broom::tidy() |> 
-          dplyr::mutate(test_run = TRUE,
-                        project = unique(.x$project), 
-                        year = unique(.x$year),
-                        month = unique(.x$month),
-                        basin = unique(.x$basin),
-                        class.name = unique(.x$class.name),
-                        DB_mean = round(mean(.x$DB.mm3.l),5),
-                        LV_mean = round(mean(.x$LV.mm3.l),5)) |> 
-          dplyr::rename(number.rows = parameter) |> 
-          dplyr::select(test_run,project,year,month,basin,class.name,DB_mean,LV_mean,dplyr::everything())},
-      error = function(e) return(
-        data.frame(
-          test_run = FALSE,
-          project = unique(.x$project), 
-          year = unique(.x$year),
-          month = unique(.x$month),
-          basin = unique(.x$basin),
-          class.name = unique(.x$class.name),
-          number.rows = nrow(.x),
-          DB_mean = round(mean(.x$DB.mm3.l,na.rm=T),5),
-          LV_mean = round(mean(.x$LV.mm3.l,na.rm=T),5)))
-    )
-  },.progress=T) |> 
-  dplyr::bind_rows() |> 
-  tidyr::as_tibble()
+  run_t_test_class('mm3.l')
 
 # Also do this where we put all classes together inside each month.
 biov_lab_paired_t_test_results = d |> 
   dplyr::group_by(project, year, month, basin) |> 
   dplyr::group_split() |> 
-  purrr::map( ~ {
-    tryCatch(
-      expr = {
-        t.test(.x$DB.mm3.l, .x$LV.mm3.l, paired = T) |> 
-          broom::tidy() |> 
-          dplyr::mutate(test_run = TRUE,
-                        project = unique(.x$project), 
-                        year = unique(.x$year),
-                        month = unique(.x$month),
-                        basin = unique(.x$basin),
-                        DB_mean = round(mean(.x$DB.mm3.l),5),
-                        LV_mean = round(mean(.x$LV.mm3.l),5)) |> 
-          dplyr::rename(number.rows = parameter) |> 
-          dplyr::select(test_run,project,year,month,basin,DB_mean,LV_mean,dplyr::everything())},
-      error = function(e) return(
-        data.frame(
-          test_run = FALSE,
-          project = unique(.x$project), 
-          year = unique(.x$year),
-          month = unique(.x$month),
-          basin = unique(.x$basin),
-          number.rows = nrow(.x),
-          DB_mean = round(mean(.x$DB.mm3.l,na.rm=T),5),
-          LV_mean = round(mean(.x$LV.mm3.l,na.rm=T),5)))
-    )
-  },.progress=T) |> 
-  dplyr::bind_rows() |> 
-  tidyr::as_tibble()
+  run_t_test('mm3.l')
 
 abund_lab_paired_t_test_box_plots = abund_lab_paired_t_test_results_within_class |> 
   dplyr::filter(p.value < 0.05) |> 
@@ -371,7 +332,8 @@ Note 2: percent difference of mean Biovolume is calculated as $100*(A-B)/((A+B)/
 
 ##### T-Test for Classes Separately
 
-Abundance:
+[Abundance:]{.underline}
+
 ```{r}
 abund_lab_paired_t_test_results_within_class |> 
   dplyr::filter(!is.na(class.name)) |> 
@@ -382,7 +344,8 @@ abund_lab_paired_t_test_results_within_class |>
   DT::datatable()
 ```
 
-Biovolume: 
+[Biovolume:]{.underline}
+
 ```{r}
 biov_lab_paired_t_test_results_within_class |> 
   dplyr::filter(!is.na(class.name)) |> 
@@ -393,9 +356,10 @@ biov_lab_paired_t_test_results_within_class |>
   DT::datatable()
 ```
 
-##### T-Tests by Month (Classes Combined)
+##### T-Tests by Month (Classes Combined within each month)
 
-Abundance:
+[Abundance:]{.underline}
+
 ```{r}
 abund_lab_paired_t_test_results |> 
   dplyr::select(-test_run) |> 
@@ -405,7 +369,8 @@ abund_lab_paired_t_test_results |>
   DT::datatable()
 ```
 
-Biovolume:
+[Biovolume:]{.underline}
+
 ```{r}
 biov_lab_paired_t_test_results |> 
   dplyr::select(-test_run) |> 
@@ -416,6 +381,8 @@ biov_lab_paired_t_test_results |>
 ```
 
 #### Boxplots
+
+Just taking the statistically significantly different means, let's visualize them as boxplots. See the plot subtitles for details of exactly which cuts of the data are being visualized.
 
 ```{r}
 abund_lab_paired_t_test_box_plots
@@ -492,6 +459,7 @@ d |>
 ```
 
 #### Edibility by Month - 2023
+
 ```{r}
 d |> 
   dplyr::filter(year == 2023, project == 'Wahleach') |> 
@@ -501,6 +469,7 @@ d |>
 ```
 
 #### Edibility by Month - 2024
+
 ```{r}
 d |> 
   dplyr::filter(year == 2024, project == 'Wahleach') |> 
@@ -574,6 +543,7 @@ d |>
 ```
 
 #### Edibility by Month - 2023
+
 ```{r}
 d |> 
   dplyr::filter(year == 2023, project == 'Alouette') |> 
@@ -583,6 +553,7 @@ d |>
 ```
 
 #### Edibility by Month - 2024
+
 ```{r}
 d |> 
   dplyr::filter(year == 2024, project == 'Alouette') |> 
