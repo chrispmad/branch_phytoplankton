@@ -36,6 +36,65 @@ my_plot_theme = theme_minimal() +
         axis.title = ggtext::element_markdown(size = 13))
 
 # Functions #
+run_t_test_year_lab = function(dat,var_name){
+  dat |> 
+    purrr::map( ~ {
+      number_rows = nrow(.x)
+      tryCatch(
+        expr = {
+          t.test(.x[[paste0("DB.",var_name)]], .x[[paste0("LV.",var_name)]], paired = T) |> 
+            broom::tidy() |> 
+            dplyr::mutate(test_run = TRUE,
+                          project = unique(.x$project), 
+                          year = unique(.x$year),
+                          DB_mean = round(mean(.x$DB.cells.ml),5),
+                          LV_mean = round(mean(.x$LV.cells.ml),5),
+                          number_rows = number_rows) |> 
+            dplyr::select(test_run,project,year,DB_mean,LV_mean,dplyr::everything())},
+        error = function(e) return(
+          data.frame(
+            test_run = FALSE,
+            project = unique(.x$project), 
+            year = unique(.x$year),
+            number_rows = number_rows,
+            DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
+            LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+      )
+    },.progress=T) |> 
+    dplyr::bind_rows() |> 
+    tidyr::as_tibble()
+}
+
+run_t_test_year_lab_class = function(dat,var_name){
+  dat |> 
+    purrr::map( ~ {
+      number_rows = nrow(.x)
+      tryCatch(
+        expr = {
+          t.test(.x[[paste0("DB.",var_name)]], .x[[paste0("LV.",var_name)]], paired = T) |> 
+            broom::tidy() |> 
+            dplyr::mutate(test_run = TRUE,
+                          project = unique(.x$project), 
+                          year = unique(.x$year),
+                          class.name = unique(.x$class.name),
+                          DB_mean = round(mean(.x$DB.cells.ml),5),
+                          LV_mean = round(mean(.x$LV.cells.ml),5),
+                          number_rows = number_rows) |> 
+            dplyr::select(test_run,project,year,DB_mean,LV_mean,dplyr::everything())},
+        error = function(e) return(
+          data.frame(
+            test_run = FALSE,
+            project = unique(.x$project), 
+            year = unique(.x$year),
+            class.name = unique(.x$class.name),
+            number_rows = number_rows,
+            DB_mean = round(mean(.x$DB.cells.l,na.rm=T),5),
+            LV_mean = round(mean(.x$LV.cells.ml,na.rm=T),5)))
+      )
+    },.progress=T) |> 
+    dplyr::bind_rows() |> 
+    tidyr::as_tibble()
+}
 
 run_t_test = function(dat,var_name){
   dat |> 
@@ -191,21 +250,47 @@ make_plot_by_month = function(d,
     
     d_for_plot = dplyr::bind_rows(db_d, lv_d)
     
-    # t_test_for_plot = t_test_results |> 
-    #               dplyr::filter(project == unique(d_for_plot$project),
-    #                             year == unique(d_for_plot$year)) |> 
-    #   dplyr::left_join(d_for_plot |> 
-    #                      dplyr::group_by(month,basin,lab) |> 
-    #                      dplyr::reframe(max_y = max(n)))
-    
-    # browser()
     p = ggplot(d_for_plot, 
                aes(x = month, y = n, fill = lab)) + 
       geom_col(position = position_dodge()) + 
-      # geom_text(aes(y = max(d_for_plot$n), label = ifelse(p.value < 0.05, '*', '')),
-      # data = t_test_for_plot) +
       scale_y_continuous(limits = c(0, max(d_for_plot$n)), breaks = seq(0,50,5)) +
       labs(y = paste0("Phytoplankton Species Counts by ", var_label),
+           x = "Month") +
+      facet_wrap(edibility ~ basin, ncol = 2, strip.position = "right") +
+      my_plot_theme + 
+      theme(legend.position = 'bottom') + 
+      scale_fill_brewer(palette = "Set2")
+  }
+  if(plot_type == 'edibility_perc_diff'){
+    
+    # Darren's data
+    db_d = d |> 
+      dplyr::select(project, year, basin, month, edibility, DB.cells.ml, DB.mm3.l, spp) |> 
+      # Ensure rows we're keeping rows where DB reported values
+      dplyr::filter(DB.cells.ml != 0, DB.mm3.l != 0, !is.na(DB.cells.ml), !is.na(DB.mm3.l)) |> 
+      dplyr::count(project, year, basin, month, edibility) |> 
+      dplyr::mutate(lab = 'Darren')
+    
+    # Lidija's data
+    lv_d = d |> 
+      dplyr::select(project, year, basin, month, 
+                    edibility, LV.cells.ml, LV.mm3.l, spp) |> 
+      # Ensure rows we're keeping rows where DB reported values
+      dplyr::filter(LV.cells.ml != 0, LV.mm3.l != 0, !is.na(LV.cells.ml), !is.na(LV.mm3.l)) |> 
+      dplyr::count(project, year, basin, month, edibility) |> 
+      dplyr::mutate(lab = 'Lidija')
+    
+    d_for_plot = dplyr::bind_rows(db_d, lv_d) |>
+      tidyr::pivot_wider(names_from = lab, values_from = n, values_fill = 0) |> 
+      dplyr::mutate(perc_diff = 100*(Darren - Lidija)/((Darren + Lidija)/2)) |> 
+      dplyr::mutate(perc_diff = ifelse(Darren == 0 | Lidija == 0, NA, perc_diff)) |> 
+      dplyr::mutate(`DB compared to LV` = ifelse(perc_diff > 0, "DB larger","LV larger")) |> 
+      dplyr::filter(!is.na(perc_diff))
+    
+    p = ggplot(d_for_plot, 
+               aes(x = month, y = perc_diff)) + 
+      geom_col(position = position_dodge(), aes(fill = `DB compared to LV`)) + 
+      labs(y = paste0("Percent Difference in Phytoplankton Species Counts by ", var_label),
            x = "Month") +
       facet_wrap(edibility ~ basin, ncol = 2, strip.position = "right") +
       my_plot_theme + 
@@ -236,10 +321,12 @@ make_plot_by_month = function(d,
 #   knitr::kable()
 ```
 
+The following table shows means, plus or minus 95% confidence intervals, for abundance and biovolume for each lab separately.
+
 ```{r descriptive_stats_by_class_and_lab}
 d |> 
   tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l)) |> 
-  dplyr::mutate(value = value, 4) |> 
+  dplyr::mutate(value = round(value, 4)) |> 
   dplyr::group_by(name, class.name) |> 
   dplyr::reframe(mean_value = round(mean(value,na.rm=T),3),
                  low_cf_int = round(ci_mean(value)[[2]][1],3),
@@ -256,6 +343,157 @@ d |>
 ```
 
 We see some fairly large differences in the means and their confidence intervals, but to test if they are significantly difference, I think we need to split the data by project, year, and basin, in addition to class name. See the 'Pairwise T-test' tab for these results.
+
+On average, what 'correction factor' (mean ratio) could we apply to Lidija's results such that they would mirror Darren's?
+
+```{r}
+d_for_mr = d |> 
+  dplyr::filter(DB.cells.ml > 0 & LV.cells.ml > 0) |> 
+  dplyr::select(DB.cells.ml, LV.cells.ml) |> 
+  dplyr::mutate(db_div_by_lv = DB.cells.ml / LV.cells.ml) |> 
+  dplyr::filter(db_div_by_lv < 100)
+
+labA = d_for_mr$DB.cells.ml
+labB = d_for_mr$LV.cells.ml
+
+mean_ratio <- round(mean(labA / labB),2)
+mean_ratio
+
+```
+
+-   compare each row of data for which Darren and Lidija both have reported cell counts for a given class.
+-   only include rows where Darren's counts aren't more than 100 times as large as Lidija's
+-   divide Darren's count by Lidija's count for each row, then take the average of those ratios (i.e. calculate the *mean ratio*), we get `r mean_ratio`. This means that we would need to multiple Lidija's counts by this correction factor to approximate Darren's counts.
+
+To get more granular with this, let's plot Lidijia's data on Darren's data in a linear model.
+```{r}
+model_origin <- round(coef(lm(labB ~ 0 + labA)),2)
+```
+
+By using this linear model (with an intercept of 0, i.e. if Darren reports 0 then logically Lidija *should* be reporting 0), we find the slope of the linear model to be `r model_origin`; this linear model suggests that we should multiple Lidija's data by roughly `r model_origin` to approximate Darren's results.
+
+The reason we're getting such large "correction factors" seems to be that Darren sometimes has counts that are much larger than Lidija's. See histogram below (for this histogram, I have NOT excluded rows where Darren's counts are more than 100 times as large as Lidija's - I did that for the calculations above)
+
+```{r}
+d |> 
+  dplyr::filter(DB.cells.ml > 0 & LV.cells.ml > 0) |> 
+  dplyr::select(DB.cells.ml, LV.cells.ml) |> 
+  dplyr::mutate(DB_div_by_LV = DB.cells.ml / LV.cells.ml) |> 
+  ggplot() + 
+  geom_histogram(aes(DB_div_by_LV))
+```
+
+### Abundance over Time by Class
+
+#### Wahleach
+
+```{r fig.height=12}
+2023:2024 |> 
+  purrr::map( ~ {
+    c("NB","SB") |> 
+      lapply(\(y){
+        d |> 
+          dplyr::filter(project == 'Wahleach') |>
+          dplyr::filter(year == .x) |> 
+          dplyr::filter(basin == y) |> 
+          tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l), names_to = "lab") |> 
+          dplyr::filter(lab %in% c("DB.cells.ml","LV.cells.ml")) |> 
+          dplyr::group_by(project, year, month, basin, class.name, lab) |> 
+          dplyr::reframe(value = sum(value,na.rm=T)) |> 
+          dplyr::ungroup() |> 
+          ggplot(aes(x = month, y = value, col = class.name, group = class.name)) + 
+          geom_point() + 
+          geom_line() +
+          labs(title = paste0("Wahleach, ",.x,", ",y), y = "Abundance") +
+          facet_wrap(class.name ~ lab, scales = 'free', ncol = 2) + 
+          my_plot_theme +
+          theme(legend.position = 'bottom')
+      })
+  })
+```
+
+#### Alouette
+
+```{r fig.height=12}
+2023:2024 |> 
+  purrr::map( ~ {
+    c("NB","SB") |> 
+      lapply(\(y){
+        d |> 
+          dplyr::filter(project == 'Alouette') |>
+          dplyr::filter(year == .x) |> 
+          dplyr::filter(basin == y) |> 
+          tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l), names_to = "lab") |> 
+          dplyr::filter(lab %in% c("DB.cells.ml","LV.cells.ml")) |> 
+          dplyr::group_by(project, year, month, basin, class.name, lab) |> 
+          dplyr::reframe(value = sum(value,na.rm=T)) |> 
+          dplyr::ungroup() |> 
+          ggplot(aes(x = month, y = value, col = class.name, group = class.name)) + 
+          geom_point() + 
+          geom_line() +
+          labs(title = paste0("Alouette, ",.x,", ",y), y = "Abundance") +
+          facet_wrap(class.name ~ lab, scales = 'free', ncol = 2) + 
+          my_plot_theme +
+          theme(legend.position = 'bottom')
+      })
+  })
+```
+
+### Edibility over Time
+
+#### Wahleach
+
+```{r fig.height=12}
+2023:2024 |> 
+  purrr::map( ~ {
+    c("NB","SB") |> 
+      lapply(\(y){
+        d |> 
+          dplyr::filter(project == 'Wahleach') |>
+          dplyr::filter(year == .x) |> 
+          dplyr::filter(basin == y) |> 
+          tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l), names_to = "lab") |> 
+          dplyr::filter(lab %in% c("DB.cells.ml","LV.cells.ml")) |> 
+          dplyr::group_by(project, year, month, basin, edibility, lab) |> 
+          dplyr::reframe(value = sum(value,na.rm=T)) |> 
+          dplyr::ungroup() |> 
+          ggplot(aes(x = month, y = value, col = edibility, group = edibility)) + 
+          geom_point() + 
+          geom_line() +
+          labs(title = paste0("Wahleach, ",.x,", ",y), y = "Abundance") +
+          facet_wrap(edibility ~ lab, scales = 'free', ncol = 2) + 
+          my_plot_theme +
+          theme(legend.position = 'bottom')
+      })
+  })
+```
+
+#### Alouette
+
+```{r fig.height=12}
+2023:2024 |> 
+  purrr::map( ~ {
+    c("NB","SB") |> 
+      lapply(\(y){
+        d |> 
+          dplyr::filter(project == 'Alouette') |>
+          dplyr::filter(year == .x) |> 
+          dplyr::filter(basin == y) |> 
+          tidyr::pivot_longer(cols = c(LV.cells.ml,LV.mm3.l,DB.cells.ml,DB.mm3.l), names_to = "lab") |> 
+          dplyr::filter(lab %in% c("DB.cells.ml","LV.cells.ml")) |> 
+          dplyr::group_by(project, year, month, basin, edibility, lab) |> 
+          dplyr::reframe(value = sum(value,na.rm=T)) |> 
+          dplyr::ungroup() |> 
+          ggplot(aes(x = month, y = value, col = edibility, group = edibility)) + 
+          geom_point() + 
+          geom_line() +
+          labs(title = paste0("Alouette, ",.x,", ",y), y = "Abundance") +
+          facet_wrap(edibility ~ lab, scales = 'free', ncol = 2) + 
+          my_plot_theme +
+          theme(legend.position = 'bottom')
+      })
+  })
+```
 
 ### Pairwise T-test {.tabset}
 
@@ -286,16 +524,30 @@ biov_lab_paired_t_test_results = d |>
   dplyr::group_split() |> 
   run_t_test('mm3.l')
 
+# Also look at abundance by year and lab
+abund_proj_year_lab_paired_t_test_results = d |> 
+  dplyr::group_by(project, year) |> 
+  dplyr::group_split() |> 
+  run_t_test_year_lab('cells.ml')
+
+# Also look at abundance by year and lab
+abund_proj_year_lab_class_paired_t_test_results = d |> 
+  dplyr::group_by(project, year, class.name) |> 
+  dplyr::group_split() |> 
+  run_t_test_year_lab_class('cells.ml')
+
 abund_lab_paired_t_test_box_plots = abund_lab_paired_t_test_results_within_class |> 
   dplyr::filter(p.value < 0.05) |> 
-  dplyr::group_by(project, year, month, basin, class.name) |> 
+  dplyr::mutate(sig_p_value = p.value <= 0.05) |> 
+  dplyr::group_by(project, year, month, basin, sig_p_value) |> 
   dplyr::group_split() |> 
   purrr::map( ~ {
     d |> 
       dplyr::filter(year == .x$year, month == .x$month,
                     basin == .x$basin, project == .x$project) |> 
       dplyr::select(-c(DB.mm3.l,LV.mm3.l)) |> 
-      tidyr::pivot_longer(cols = c(DB.cells.ml,LV.cells.ml)) |> 
+      tidyr::pivot_longer(cols = c(DB.cells.ml,LV.cells.ml)) |>
+      dplyr::filter(class.name %in% na.omit(.x[.x$sig_p_value,]$class.name)) |> 
       ggplot(aes(x = class.name, y = value, fill = name)) + 
       geom_boxplot() + 
       labs(x = "Class", y = "Cell Count", fill = "Lab",
@@ -307,7 +559,8 @@ abund_lab_paired_t_test_box_plots = abund_lab_paired_t_test_results_within_class
 
 biov_lab_paired_t_test_box_plots = biov_lab_paired_t_test_results_within_class |> 
   dplyr::filter(p.value < 0.05) |> 
-  dplyr::group_by(project, year, month, basin, class.name) |> 
+  dplyr::mutate(sig_p_value = p.value <= 0.05) |> 
+  dplyr::group_by(project, year, month, basin, class.name, sig_p_value) |> 
   dplyr::group_split() |> 
   purrr::map( ~ {
     d |> 
@@ -315,6 +568,7 @@ biov_lab_paired_t_test_box_plots = biov_lab_paired_t_test_results_within_class |
                     basin == .x$basin, project == .x$project) |> 
       dplyr::select(-c(DB.cells.ml,LV.cells.ml)) |> 
       tidyr::pivot_longer(cols = c(DB.mm3.l,LV.mm3.l)) |> 
+      dplyr::filter(class.name %in% na.omit(.x[.x$sig_p_value,]$class.name)) |> 
       ggplot(aes(x = class.name, y = value, fill = name)) + 
       geom_boxplot() + 
       labs(x = "Class", y = "Biovolume", fill = "Lab",
@@ -326,9 +580,32 @@ biov_lab_paired_t_test_box_plots = biov_lab_paired_t_test_results_within_class |
 
 #### Table {.tabset}
 
-Note 1: These T-tests compare the Abundance Biovolume recordings of Darren and Lidija by project, year, month, basin; an additional pair of tests also split th data by class name. Some of these data 'cuts' had too few rows of data to run the test (e.g. a single row): see column "number.rows" to see the total number of rows of data for both labs combined.
+Note 1: These T-tests compare the Abundance andBiovolume recordings of Darren and Lidija by project, year, month, basin; an additional pair of tests also split the data by class name. Some of these data 'cuts' had too few rows of data to run the test (e.g. a single row): see column "number.rows" to see the total number of rows of data for both labs combined.
 
-Note 2: percent difference of mean Biovolume is calculated as $100*(A-B)/((A+B)/2)$, where *A* is Darren's lab's values (`DB.mm3.l`) and *B* is Lidija's lab's values (`LV.mm3.l`).
+Note 2: percent difference of mean Biovolume is calculated as $100*(A-B)/((A+B)/2)$, where *A* is Darren's lab's values (`DB.mm3.l`) and *B* is Lidija's lab's values (`LV.mm3.l`); this means that Lidija's values are the 'reference' values, and Darren's values are displayed relative to those.
+
+##### T-test by year and lab
+
+```{r}
+abund_proj_year_lab_paired_t_test_results |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
+
+##### T-test by year, lab and class name
+
+```{r}
+abund_proj_year_lab_class_paired_t_test_results |> 
+  dplyr::filter(!is.na(class.name)) |> 
+  dplyr::select(-test_run) |> 
+  dplyr::mutate(perc_diff = paste0(round(100*(DB_mean - LV_mean)/(DB_mean + LV_mean),2),"%")) |> 
+  dplyr::mutate(dplyr::across(c(estimate,statistic,p.value,conf.low,conf.high), \(x) round(x,5))) |> 
+  dplyr::select(project:LV_mean,perc_diff,dplyr::everything()) |> 
+  DT::datatable()
+```
 
 ##### T-Test for Classes Separately
 
@@ -478,6 +755,26 @@ d |>
                      t_test_results = abund_lab_paired_t_test_results)
 ```
 
+#### Percent Difference Edibility by Month - 2023
+
+```{r}
+d |> 
+  dplyr::filter(year == 2023, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility_perc_diff',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
+#### Percent Difference Edibility by Month - 2024
+
+```{r}
+d |> 
+  dplyr::filter(year == 2024, project == 'Wahleach') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility_perc_diff',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
 ### Alouette {.tabset}
 
 #### Abundance by Month - 2023
@@ -559,5 +856,25 @@ d |>
   dplyr::filter(year == 2024, project == 'Alouette') |> 
   make_plot_by_month(var_label = "Edibility",
                      plot_type = 'edibility',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
+#### Percent Difference Edibility by Month - 2023
+
+```{r}
+d |> 
+  dplyr::filter(year == 2023, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility_perc_diff',
+                     t_test_results = abund_lab_paired_t_test_results)
+```
+
+#### Percent Difference Edibility by Month - 2024
+
+```{r}
+d |> 
+  dplyr::filter(year == 2024, project == 'Alouette') |> 
+  make_plot_by_month(var_label = "Edibility",
+                     plot_type = 'edibility_perc_diff',
                      t_test_results = abund_lab_paired_t_test_results)
 ```
